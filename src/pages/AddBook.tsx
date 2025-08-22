@@ -1,40 +1,33 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Navigation } from "@/components/ui/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Search, BookOpen, Camera } from "lucide-react";
+import { Search, BookOpen, Camera, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import Quagga from "quagga";
 
 export default function AddBook() {
   const [isbn, setIsbn] = useState("");
   const [bookData, setBookData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const scannerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  const fetchBookData = async () => {
-    if (!isbn.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter an ISBN",
-        variant: "destructive",
-      });
-      return;
-    }
-
+  const fetchBookDataWithISBN = async (isbnCode: string) => {
     setLoading(true);
     try {
-      // Try Open Library API first
-      const response = await fetch(`https://openlibrary.org/isbn/${isbn}.json`);
+      const response = await fetch(`https://openlibrary.org/isbn/${isbnCode}.json`);
       if (response.ok) {
         const data = await response.json();
         setBookData({
           title: data.title,
           authors: data.authors?.[0]?.name || "Unknown Author",
           publish_date: data.publish_date,
-          cover_url: `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`,
-          isbn: isbn
+          cover_url: `https://covers.openlibrary.org/b/isbn/${isbnCode}-M.jpg`,
+          isbn: isbnCode
         });
       } else {
         throw new Error("Book not found");
@@ -49,6 +42,70 @@ export default function AddBook() {
     setLoading(false);
   };
 
+  const fetchBookData = async () => {
+    if (!isbn.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter an ISBN",
+        variant: "destructive",
+      });
+      return;
+    }
+    fetchBookDataWithISBN(isbn);
+  };
+
+  const startScanning = () => {
+    setScanning(true);
+    
+    if (scannerRef.current) {
+      Quagga.init({
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: scannerRef.current,
+          constraints: {
+            width: 400,
+            height: 300,
+            facingMode: "environment"
+          }
+        },
+        decoder: {
+          readers: ["ean_reader", "ean_8_reader"]
+        }
+      }, (err) => {
+        if (err) {
+          console.error("QuaggaJS initialization error:", err);
+          toast({
+            title: "Camera Error",
+            description: "Could not access camera. Please check permissions.",
+            variant: "destructive",
+          });
+          setScanning(false);
+          return;
+        }
+        Quagga.start();
+      });
+
+      Quagga.onDetected((data) => {
+        const detectedISBN = data.codeResult.code;
+        setIsbn(detectedISBN);
+        stopScanning();
+        fetchBookDataWithISBN(detectedISBN);
+        
+        toast({
+          title: "Barcode Detected!",
+          description: `ISBN: ${detectedISBN}`,
+        });
+      });
+    }
+  };
+
+  const stopScanning = () => {
+    Quagga.stop();
+    setScanning(false);
+  };
+
+
   const saveBook = () => {
     // This will be implemented with Supabase integration
     toast({
@@ -56,6 +113,14 @@ export default function AddBook() {
       description: "To save books, please connect your Supabase database first.",
     });
   };
+
+  useEffect(() => {
+    return () => {
+      if (scanning) {
+        Quagga.stop();
+      }
+    };
+  }, [scanning]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -98,11 +163,42 @@ export default function AddBook() {
                 </div>
               </div>
 
-              {/* Future: Barcode Scanner */}
-              <div className="border-2 border-dashed border-muted rounded-lg p-6 text-center">
-                <Camera className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                <p className="text-muted-foreground">Barcode scanning coming soon!</p>
-              </div>
+              {/* Barcode Scanner */}
+              {!scanning ? (
+                <div className="border-2 border-dashed border-muted rounded-lg p-6 text-center">
+                  <Camera className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                  <p className="text-muted-foreground mb-3">Scan a barcode to auto-fill book details</p>
+                  <Button 
+                    onClick={startScanning}
+                    variant="outline"
+                    className="flex items-center gap-2"
+                  >
+                    <Camera className="h-4 w-4" />
+                    Start Scanning
+                  </Button>
+                </div>
+              ) : (
+                <div className="border-2 border-primary rounded-lg p-4">
+                  <div className="flex justify-between items-center mb-3">
+                    <h3 className="font-medium">Scanning for barcode...</h3>
+                    <Button 
+                      onClick={stopScanning}
+                      variant="ghost" 
+                      size="sm"
+                      className="h-8 w-8 p-0"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div 
+                    ref={scannerRef} 
+                    className="w-full h-64 bg-black rounded overflow-hidden"
+                  />
+                  <p className="text-sm text-muted-foreground mt-2 text-center">
+                    Position the barcode in the camera view
+                  </p>
+                </div>
+              )}
 
               {/* Book Preview */}
               {bookData && (
