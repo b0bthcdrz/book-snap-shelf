@@ -15,6 +15,7 @@ export default function AddBook() {
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const scannerRef = useRef<HTMLDivElement>(null);
+  const quaggaInitialized = useRef(false);
   const { toast } = useToast();
 
   const fetchBookData = async (isbnCode: string) => {
@@ -88,9 +89,11 @@ export default function AddBook() {
               variant: "destructive",
             });
             setScanning(false);
+            quaggaInitialized.current = false;
             return;
           }
           Quagga.start();
+          quaggaInitialized.current = true;
         });
 
         Quagga.onDetected((data) => {
@@ -117,7 +120,10 @@ export default function AddBook() {
   };
 
   const stopScanning = () => {
-    Quagga.stop();
+    if (quaggaInitialized.current) {
+      Quagga.stop();
+      quaggaInitialized.current = false;
+    }
     setScanning(false);
   };
 
@@ -131,11 +137,12 @@ export default function AddBook() {
 
   useEffect(() => {
     return () => {
-      if (scanning) {
+      if (quaggaInitialized.current) {
         Quagga.stop();
+        quaggaInitialized.current = false;
       }
     };
-  }, [scanning]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
