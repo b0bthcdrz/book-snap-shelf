@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect } from "react";
 import { Navigation } from "@/components/ui/navigation";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ export default function AddBook() {
   const scannerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  const fetchBookDataWithISBN = async (isbnCode: string) => {
+  const fetchBookData = async (isbnCode: string) => {
     setLoading(true);
     try {
       const response = await fetch(`https://openlibrary.org/isbn/${isbnCode}.json`);
@@ -42,7 +43,7 @@ export default function AddBook() {
     setLoading(false);
   };
 
-  const fetchBookData = async () => {
+  const handleSearch = async () => {
     if (!isbn.trim()) {
       toast({
         title: "Error",
@@ -51,7 +52,7 @@ export default function AddBook() {
       });
       return;
     }
-    fetchBookDataWithISBN(isbn);
+    fetchBookData(isbn);
   };
 
   const startScanning = () => {
@@ -90,7 +91,7 @@ export default function AddBook() {
         const detectedISBN = data.codeResult.code;
         setIsbn(detectedISBN);
         stopScanning();
-        fetchBookDataWithISBN(detectedISBN);
+        fetchBookData(detectedISBN);
         
         toast({
           title: "Barcode Detected!",
@@ -104,7 +105,6 @@ export default function AddBook() {
     Quagga.stop();
     setScanning(false);
   };
-
 
   const saveBook = () => {
     // This will be implemented with Supabase integration
@@ -153,7 +153,7 @@ export default function AddBook() {
                     className="flex-1"
                   />
                   <Button 
-                    onClick={fetchBookData} 
+                    onClick={handleSearch} 
                     disabled={loading}
                     className="flex items-center gap-2"
                   >
