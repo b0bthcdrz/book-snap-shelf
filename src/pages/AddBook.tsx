@@ -55,49 +55,64 @@ export default function AddBook() {
     fetchBookData(isbn);
   };
 
-  const startScanning = () => {
+  const startScanning = async () => {
     setScanning(true);
     
-    if (scannerRef.current) {
-      Quagga.init({
-        inputStream: {
-          name: "Live",
-          type: "LiveStream",
-          target: scannerRef.current,
-          constraints: {
-            width: 400,
-            height: 300,
-            facingMode: "environment"
+    try {
+      // First request camera permission explicitly
+      await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: "environment" } 
+      });
+      
+      if (scannerRef.current) {
+        Quagga.init({
+          inputStream: {
+            name: "Live",
+            type: "LiveStream",
+            target: scannerRef.current,
+            constraints: {
+              width: 400,
+              height: 300,
+              facingMode: "environment"
+            }
+          },
+          decoder: {
+            readers: ["ean_reader", "ean_8_reader", "code_128_reader"]
           }
-        },
-        decoder: {
-          readers: ["ean_reader", "ean_8_reader"]
-        }
-      }, (err) => {
-        if (err) {
-          console.error("QuaggaJS initialization error:", err);
-          toast({
-            title: "Camera Error",
-            description: "Could not access camera. Please check permissions.",
-            variant: "destructive",
-          });
-          setScanning(false);
-          return;
-        }
-        Quagga.start();
-      });
-
-      Quagga.onDetected((data) => {
-        const detectedISBN = data.codeResult.code;
-        setIsbn(detectedISBN);
-        stopScanning();
-        fetchBookData(detectedISBN);
-        
-        toast({
-          title: "Barcode Detected!",
-          description: `ISBN: ${detectedISBN}`,
+        }, (err) => {
+          if (err) {
+            console.error("QuaggaJS initialization error:", err);
+            toast({
+              title: "Camera Error",
+              description: "Could not access camera. Please check permissions.",
+              variant: "destructive",
+            });
+            setScanning(false);
+            return;
+          }
+          Quagga.start();
         });
+
+        Quagga.onDetected((data) => {
+          const detectedISBN = data.codeResult.code;
+          setIsbn(detectedISBN);
+          stopScanning();
+          fetchBookData(detectedISBN);
+          
+          toast({
+            title: "Barcode Detected!",
+            description: `ISBN: ${detectedISBN}`,
+          });
+        });
+      }
+    } catch (err) {
+      console.error("Camera permission error:", err);
+      toast({
+        title: "Camera Permission Required",
+        description: "Please allow camera access to scan barcodes.",
+        variant: "destructive",
       });
+      setScanning(false);
     }
   };
 
