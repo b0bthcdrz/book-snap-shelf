@@ -78,8 +78,10 @@ export default function AddBook() {
             }
           },
           decoder: {
-            readers: ["ean_reader", "ean_8_reader", "code_128_reader"]
-          }
+            readers: ["ean_reader", "ean_8_reader", "ean_13_reader", "code_128_reader"]
+          },
+          locate: true,
+          frequency: 10
         }, (err) => {
           if (err) {
             console.error("QuaggaJS initialization error:", err);
@@ -92,11 +94,21 @@ export default function AddBook() {
             quaggaInitialized.current = false;
             return;
           }
+          console.log("QuaggaJS started successfully");
           Quagga.start();
           quaggaInitialized.current = true;
         });
 
+        // Add debugging for detection attempts
+        Quagga.onProcessed((result) => {
+          console.log("QuaggaJS processing frame...");
+          if (result && result.codeResult) {
+            console.log("Potential barcode detected:", result.codeResult.code);
+          }
+        });
+
         Quagga.onDetected((data) => {
+          console.log("Barcode confirmed:", data.codeResult.code);
           const detectedISBN = data.codeResult.code;
           setIsbn(detectedISBN);
           stopScanning();
