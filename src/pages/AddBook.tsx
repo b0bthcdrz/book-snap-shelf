@@ -7,15 +7,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Search, BookOpen, Camera, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import Quagga from "quagga";
+import { BrowserMultiFormatReader } from "@zxing/library";
 
 export default function AddBook() {
   const [isbn, setIsbn] = useState("");
   const [bookData, setBookData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const scannerRef = useRef<HTMLDivElement>(null);
-  const quaggaInitialized = useRef(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const codeReader = useRef<BrowserMultiFormatReader | null>(null);
   const { toast } = useToast();
 
   const fetchBookData = async (isbnCode: string) => {
@@ -60,71 +60,38 @@ export default function AddBook() {
     setScanning(true);
     
     try {
-      // First request camera permission explicitly
-      await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: "environment" } 
-      });
+      codeReader.current = new BrowserMultiFormatReader();
       
-      if (scannerRef.current) {
-        Quagga.init({
-          inputStream: {
-            name: "Live",
-            type: "LiveStream",
-            target: scannerRef.current,
-            constraints: {
-              width: 400,
-              height: 300,
-              facingMode: "environment"
+      if (videoRef.current) {
+        console.log("Starting ZXing scanner...");
+        
+        await codeReader.current.decodeFromVideoDevice(
+          undefined, // Use default camera
+          videoRef.current,
+          (result, error) => {
+            if (result) {
+              console.log("Barcode detected:", result.getText());
+              const detectedISBN = result.getText();
+              setIsbn(detectedISBN);
+              stopScanning();
+              fetchBookData(detectedISBN);
+              
+              toast({
+                title: "Barcode Detected!",
+                description: `ISBN: ${detectedISBN}`,
+              });
             }
-          },
-          decoder: {
-            readers: ["ean_reader", "ean_8_reader", "ean_13_reader", "code_128_reader"]
-          },
-          locate: true,
-          frequency: 10
-        }, (err) => {
-          if (err) {
-            console.error("QuaggaJS initialization error:", err);
-            toast({
-              title: "Camera Error",
-              description: "Could not access camera. Please check permissions.",
-              variant: "destructive",
-            });
-            setScanning(false);
-            quaggaInitialized.current = false;
-            return;
+            if (error) {
+              console.log("ZXing scanning...", error.message);
+            }
           }
-          console.log("QuaggaJS started successfully");
-          Quagga.start();
-          quaggaInitialized.current = true;
-        });
-
-        // Add debugging for detection attempts
-        Quagga.onProcessed((result) => {
-          console.log("QuaggaJS processing frame...");
-          if (result && result.codeResult) {
-            console.log("Potential barcode detected:", result.codeResult.code);
-          }
-        });
-
-        Quagga.onDetected((data) => {
-          console.log("Barcode confirmed:", data.codeResult.code);
-          const detectedISBN = data.codeResult.code;
-          setIsbn(detectedISBN);
-          stopScanning();
-          fetchBookData(detectedISBN);
-          
-          toast({
-            title: "Barcode Detected!",
-            description: `ISBN: ${detectedISBN}`,
-          });
-        });
+        );
       }
     } catch (err) {
-      console.error("Camera permission error:", err);
+      console.error("Scanner error:", err);
       toast({
-        title: "Camera Permission Required",
-        description: "Please allow camera access to scan barcodes.",
+        title: "Camera Error",
+        description: "Could not access camera. Please check permissions.",
         variant: "destructive",
       });
       setScanning(false);
@@ -132,9 +99,9 @@ export default function AddBook() {
   };
 
   const stopScanning = () => {
-    if (quaggaInitialized.current) {
-      Quagga.stop();
-      quaggaInitialized.current = false;
+    if (codeReader.current) {
+      codeReader.current.reset();
+      codeReader.current = null;
     }
     setScanning(false);
   };
@@ -149,9 +116,8 @@ export default function AddBook() {
 
   useEffect(() => {
     return () => {
-      if (quaggaInitialized.current) {
-        Quagga.stop();
-        quaggaInitialized.current = false;
+      if (codeReader.current) {
+        codeReader.current.reset();
       }
     };
   }, []);
@@ -224,9 +190,11 @@ export default function AddBook() {
                       <X className="h-4 w-4" />
                     </Button>
                   </div>
-                  <div 
-                    ref={scannerRef} 
+                  <video 
+                    ref={videoRef} 
                     className="w-full h-64 bg-black rounded overflow-hidden"
+                    autoPlay
+                    playsInline
                   />
                   <p className="text-sm text-muted-foreground mt-2 text-center">
                     Position the barcode in the camera view
