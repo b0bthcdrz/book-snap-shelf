@@ -1,8 +1,8 @@
-import { getBooksCollection, serializeBook } from "./_lib/mongo.js";
-import { parseJsonBody } from "./_lib/request.js";
+import { getBooksCollection, serializeBook } from "./_lib/mongo";
+import { parseJsonBody } from "./_lib/request";
 
 export const config = {
-  runtime: "nodejs",
+  runtime: "nodejs18.x",
 };
 
 const DEMO_USER_ID = "00000000-0000-0000-0000-000000000001";
@@ -21,8 +21,27 @@ export default async function handler(req: Request): Promise<Response> {
     const collection = await getBooksCollection();
 
     if (req.method === "GET") {
-      const docs = await collection.find().sort({ created_at: -1 }).toArray();
-      return jsonResponse({ books: docs.map(serializeBook) });
+      const docs = await collection.find().toArray();
+
+      const sortedDocs = docs
+        .map((doc) => {
+          const sortCandidate =
+            doc.created_at ??
+            (doc as any).date_recorded ??
+            null;
+          const parsed = sortCandidate ? Date.parse(sortCandidate) : NaN;
+          const fallback =
+            typeof (doc as any)._id?.getTimestamp === "function"
+              ? (doc as any)._id.getTimestamp().getTime()
+              : 0;
+          const sortValue = Number.isFinite(parsed) ? parsed : fallback;
+
+          return { doc, sortValue };
+        })
+        .sort((a, b) => b.sortValue - a.sortValue)
+        .map(({ doc }) => doc);
+
+      return jsonResponse({ books: sortedDocs.map(serializeBook) });
     }
 
     if (req.method === "POST") {
