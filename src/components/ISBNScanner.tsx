@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Camera, Play, Pause, Barcode, Flashlight } from "lucide-react";
-import Quagga from "@ericblade/quagga2";
+import { BinaryBitmap, DecodeHintType, HybridBinarizer, MultiFormatReader, NotFoundException, RGBLuminanceSource, BarcodeFormat } from "@zxing/library";
 
 export type ISBNScannerProps = {
 	onISBNDetected: (isbn: string) => void;
@@ -21,6 +21,10 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 	const [lastDetected, setLastDetected] = useState<string | null>(null);
 	const detectionLockRef = useRef(false);
 	const [torchOn, setTorchOn] = useState(false);
+	const scanLoopRef = useRef<number | null>(null);
+	const readerRef = useRef<MultiFormatReader | null>(null);
+	const canvasRef = useRef<HTMLCanvasElement | null>(null);
+	const roiRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
 	function getVideoTrack(): MediaStreamTrack | null {
 		const el = videoElRef.current as any;
@@ -50,6 +54,25 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 		setIsStarting(true);
 		try {
 			setStatus("Initializing camera...");
+			const stream = await navigator.mediaDevices.getUserMedia({
+				video: {
+					facingMode: "environment",
+					focusMode: "continuous",
+					aspectRatio: { ideal: 1.5 },
+					width: { ideal: 1280 },
+					height: { ideal: 720 },
+				},
+				audio: false,
+			});
+
+			const videoEl = document.createElement("video");
+			videoEl.playsInline = true;
+			videoEl.muted = true;
+			videoEl.autoplay = true;
+			videoEl.srcObject = stream;
+			await videoEl.play();
+			videoElRef.current = videoEl;
+
 			setIsReady(true);
 			setStatus("Camera ready");
 		} finally {
@@ -59,6 +82,9 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 
 	function stopCamera() {
 		stopScanning();
+		const track = getVideoTrack();
+		track?.stop();
+		videoElRef.current = null;
 		setIsReady(false);
 		setStatus("Idle");
 	}
@@ -72,55 +98,87 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 
 	async function startScanning() {
 		if (!isReady || isScanning) return;
-		if (!videoContainerRef.current) return;
+		if (!videoContainerRef.current || !videoElRef.current) return;
+
 		setIsScanning(true);
 		setStatus("Scanning...");
 		detectionLockRef.current = false;
 
-		await Quagga.init({
-			inputStream: {
-				type: "LiveStream",
-				target: videoContainerRef.current,
-				constraints: {
-					facingMode: "environment",
-					aspectRatio: { min: 1, max: 2 },
-				},
-				area: { top: "35%", right: "10%", left: "10%", bottom: "35%" },
-			},
-			locator: { patchSize: "medium", halfSample: true },
-			numOfWorkers: navigator.hardwareConcurrency ? Math.max(1, navigator.hardwareConcurrency - 1) : 2,
-			decoder: { readers: ["ean_reader", "ean_8_reader", "upc_reader"] },
-		}, (err) => {
-			if (err) {
-				console.error(err);
-				toast({ title: "Scanner Error", description: String(err), variant: "destructive" });
-				setStatus("Scanner error");
-				setIsScanning(false);
+		// Mount the video element into the container so layout/overlay align
+		videoContainerRef.current.innerHTML = "";
+		videoContainerRef.current.appendChild(videoElRef.current);
+		videoElRef.current.style.width = "100%";
+		videoElRef.current.style.height = "100%";
+		videoElRef.current.style.objectFit = "cover";
+
+		// Prepare decoder with EAN/UPC-only hints for speed
+		const hints = new Map();
+		hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+			BarcodeFormat.EAN_13,
+			BarcodeFormat.EAN_8,
+			BarcodeFormat.UPC_A,
+			BarcodeFormat.UPC_E,
+		]);
+		readerRef.current = new MultiFormatReader();
+		readerRef.current.setHints(hints);
+
+		if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
+
+		const ensureRoi = () => {
+			const v = videoElRef.current!;
+			const w = v.videoWidth;
+			const h = v.videoHeight;
+			if (!w || !h) return null;
+			const roiW = Math.floor(w * 0.6);
+			const roiH = Math.floor(h * 0.4);
+			const x = Math.floor((w - roiW) / 2);
+			const y = Math.floor((h - roiH) / 2);
+			roiRef.current = { x, y, w: roiW, h: roiH };
+			return roiRef.current;
+		};
+
+		const scanFrame = () => {
+			if (!readerRef.current || !videoElRef.current || detectionLockRef.current) return;
+			const roi = roiRef.current || ensureRoi();
+			if (!roi) {
+				scanLoopRef.current = requestAnimationFrame(scanFrame);
 				return;
 			}
-			Quagga.start();
-			const video = (videoContainerRef.current!.querySelector("video") as HTMLVideoElement) || null;
-			videoElRef.current = video;
-		});
 
-		Quagga.onProcessed((_result) => {
-			// Optional: draw overlays here
-		});
-
-		Quagga.onDetected((data) => {
-			if (detectionLockRef.current) return;
-			const code = data?.codeResult?.code;
-			if (!code) return;
-			const isbn = normalizeToISBN(code);
-			if (isbn) {
-				detectionLockRef.current = true;
-				setLastDetected(isbn);
-				setStatus("Detected");
-				toast({ title: "ISBN Captured", description: isbn });
-				onISBNDetected(isbn);
-				stopScanning();
+			const { x, y, w, h } = roi;
+			const canvas = canvasRef.current!;
+			canvas.width = w;
+			canvas.height = h;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) {
+				scanLoopRef.current = requestAnimationFrame(scanFrame);
+				return;
 			}
-		});
+			ctx.drawImage(videoElRef.current, x, y, w, h, 0, 0, w, h);
+			const imageData = ctx.getImageData(0, 0, w, h);
+			const luminance = new RGBLuminanceSource(imageData.data, w, h);
+			const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminance));
+			try {
+				const result = readerRef.current.decode(binaryBitmap);
+				const isbn = normalizeToISBN(result.getText());
+				if (isbn) {
+					detectionLockRef.current = true;
+					setLastDetected(isbn);
+					setStatus("Detected");
+					toast({ title: "ISBN Captured", description: isbn });
+					onISBNDetected(isbn);
+					stopScanning();
+					return;
+				}
+			} catch (e) {
+				if (!(e instanceof NotFoundException)) {
+					console.error("Decode error", e);
+				}
+			}
+			scanLoopRef.current = requestAnimationFrame(scanFrame);
+		};
+
+		scanLoopRef.current = requestAnimationFrame(scanFrame);
 	}
 
 	async function fallbackCaptureAndDecode() {
@@ -133,29 +191,38 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 			const ctx = canvas.getContext("2d");
 			if (!ctx) return;
 			ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-			const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+			const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+			const luminance = new RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
+			const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminance));
 			setStatus("Decoding still...");
-			Quagga.decodeSingle({
-				src: dataUrl,
-				numOfWorkers: 0,
-				decoder: { readers: ["ean_reader", "ean_8_reader", "upc_reader"] },
-				locate: true,
-			}, (result) => {
-				if (result && (result as any).codeResult) {
-					const code = (result as any).codeResult.code;
-					const isbn = normalizeToISBN(code);
-					if (isbn) {
-						setLastDetected(isbn);
-						setStatus("Detected");
-						toast({ title: "ISBN Captured", description: isbn });
-						onISBNDetected(isbn);
-						stopScanning();
-						return;
-					}
+			const reader = readerRef.current ?? new MultiFormatReader();
+			if (!readerRef.current) {
+				const hints = new Map();
+				hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+					BarcodeFormat.EAN_13,
+					BarcodeFormat.EAN_8,
+					BarcodeFormat.UPC_A,
+					BarcodeFormat.UPC_E,
+				]);
+				reader.setHints(hints);
+			}
+			try {
+				const result = reader.decode(binaryBitmap);
+				const isbn = normalizeToISBN(result.getText());
+				if (isbn) {
+					setLastDetected(isbn);
+					setStatus("Detected");
+					toast({ title: "ISBN Captured", description: isbn });
+					onISBNDetected(isbn);
+					stopScanning();
+					return;
 				}
 				setStatus("No code in still");
 				toast({ title: "No barcode detected", description: "Try better lighting and alignment" });
-			});
+			} catch (e) {
+				setStatus("No code in still");
+				toast({ title: "No barcode detected", description: "Try better lighting and alignment" });
+			}
 		} catch (e: any) {
 			console.error(e);
 			toast({ title: "Decode failed", description: e?.message ?? String(e), variant: "destructive" });
@@ -163,9 +230,12 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 	}
 
 	function stopScanning() {
-		try { Quagga.stop(); } catch {}
-		try { Quagga.offProcessed(() => {}); } catch {}
-		try { Quagga.offDetected(() => {}); } catch {}
+		if (scanLoopRef.current) {
+			cancelAnimationFrame(scanLoopRef.current);
+			scanLoopRef.current = null;
+		}
+		readerRef.current = null;
+		roiRef.current = null;
 		setIsScanning(false);
 		if (isReady) setStatus("Camera ready");
 	}
@@ -173,6 +243,7 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 	useEffect(() => {
 		return () => {
 			stopScanning();
+			stopCamera();
 		};
 	}, []);
 
@@ -192,7 +263,7 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 							<div className="absolute top-4 right-4 w-8 h-8 border-r-2 border-t-2 border-green-400" />
 							<div className="absolute bottom-4 left-4 w-8 h-8 border-l-2 border-b-2 border-green-400" />
 							<div className="absolute bottom-4 right-4 w-8 h-8 border-r-2 border-b-2 border-green-400" />
-							<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-56 h-20 border-2 border-red-400 opacity-80" />
+							<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[60%] h-[40%] border-2 border-red-400 opacity-90 shadow-[0_0_0_9999px_rgba(0,0,0,0.3)]" />
 							{lastDetected && (
 								<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[calc(50%+2.5rem)] bg-black/70 text-white text-xs px-2 py-1 rounded">
 									Detected: {lastDetected}
@@ -233,7 +304,8 @@ export default function ISBNScanner({ onISBNDetected, className }: ISBNScannerPr
 				<div className="text-xs text-muted-foreground space-y-1">
 					<p><span className="font-medium">Status:</span> {status}</p>
 					{lastDetected && <p><span className="font-medium">Last detected:</span> {lastDetected}</p>}
-					<p>• Align barcode within the red rectangle</p>
+					<p>• Place the barcode fully inside the red box (center)</p>
+					<p>• Hold steady; decoding runs every frame for speed</p>
 					<p>• Use Torch if available</p>
 				</div>
 			</CardContent>

@@ -1,46 +1,113 @@
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Navigation } from "@/components/ui/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Camera } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { BookOpenCheck, BookPlus, Loader2, Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import CoverScanner from "@/components/CoverScanner";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchBookByIsbn } from "@/lib/googleBooks";
+
+type BookFormData = {
+  title: string;
+  authors: string;
+  isbn: string;
+  year: string;
+  publisher: string;
+  genre: string;
+  description: string;
+  cover_url: string;
+};
+
+const emptyBook: BookFormData = {
+  title: "",
+  authors: "",
+  isbn: "",
+  year: "",
+  publisher: "",
+  genre: "",
+  description: "",
+  cover_url: "",
+};
 
 export default function AddBook() {
-  const [bookData, setBookData] = useState<any>(null);
+  const [bookData, setBookData] = useState<BookFormData | null>(null);
+  const [isbnInput, setIsbnInput] = useState("");
+  const [isLookingUp, setIsLookingUp] = useState(false);
   const { toast } = useToast();
-  const [processedCoverUrl, setProcessedCoverUrl] = useState<string | null>(null);
 
-  // Check Gemini API key on component mount
   useEffect(() => {
-    if (!import.meta.env.VITE_GEMINI_API_KEY) {
+    if (!import.meta.env.VITE_GOOGLE_BOOKS_API_KEY) {
       toast({
-        title: "Gemini API Key Missing",
-        description: "Please add VITE_GEMINI_API_KEY to your environment variables for AI book analysis.",
-        variant: "destructive",
+        title: "Google Books API Key",
+        description: "No VITE_GOOGLE_BOOKS_API_KEY found. Public requests will work but are rate limited.",
       });
     }
   }, [toast]);
 
-  // Test storage bucket access
-  const testStorageAccess = async () => {
-    try {
-      console.log('🔍 Testing storage bucket access...');
-      const { data, error } = await supabase.storage.from('covers').list('', { limit: 1 });
-      if (error) {
-        console.error('❌ Storage bucket test failed:', error);
-        return false;
-      } else {
-        console.log('✅ Storage bucket accessible:', data);
-        return true;
-      }
-    } catch (err) {
-      console.error('💥 Storage bucket test exception:', err);
-      return false;
+  const handleLookup = async () => {
+    const cleanedIsbn = isbnInput.replace(/[^\dXx]/g, "");
+    if (!cleanedIsbn) {
+      toast({ title: "Enter an ISBN", description: "Please type a valid ISBN first.", variant: "destructive" });
+      return;
     }
+
+    try {
+      setIsLookingUp(true);
+      const data = await fetchBookByIsbn(cleanedIsbn);
+
+      if (!data) {
+        toast({
+          title: "No book found",
+          description: "Google Books could not find that ISBN. Try another one or enter details manually.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setBookData({
+        title: data.title ?? "",
+        authors: (data.authors ?? []).join(", "),
+        isbn: cleanedIsbn,
+        year: data.year ?? "",
+        publisher: data.publisher ?? "",
+        genre: data.genre ?? "",
+        description: data.description ?? "",
+        cover_url: data.coverUrl ?? "",
+      });
+
+      toast({
+        title: "Book data found!",
+        description: `${data.title} by ${(data.authors ?? []).join(", ")}`,
+      });
+    } catch (error: any) {
+      console.error("ISBN lookup failed:", error);
+      toast({
+        title: "Lookup failed",
+        description: error?.message || "Could not fetch book data. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLookingUp(false);
+    }
+  };
+
+  const startManualEntry = () => {
+    setBookData({
+      ...emptyBook,
+      isbn: isbnInput.replace(/[^\dXx]/g, ""),
+    });
+
+    toast({
+      title: "Manual entry",
+      description: "Fill in the fields below and save when ready.",
+    });
+  };
+
+  const updateField = (field: keyof BookFormData, value: string) => {
+    setBookData((prev) => (prev ? { ...prev, [field]: value } : prev));
   };
 
   const saveBook = async () => {
@@ -50,137 +117,33 @@ export default function AddBook() {
         return;
       }
 
-      // Use demo user ID (bypass authentication for now)
-      const demoUserId = "00000000-0000-0000-0000-000000000001";
-
-      // Check for duplicate ISBN
-      if (bookData.isbn) {
-        const { data: existingBooks, error: checkError } = await (supabase as any)
-          .from("books")
-          .select("id, title, author")
-          .eq("isbn", bookData.isbn);
-        
-        if (checkError) {
-          console.error("Error checking for duplicates:", checkError);
-        } else if (existingBooks && existingBooks.length > 0) {
-          const existingBook = existingBooks[0];
-          toast({ 
-            title: "Book already added", 
-            description: `"${existingBook.title}" by ${existingBook.author} is already in your library.`,
-            variant: "destructive" 
-          });
-          return;
-        }
+      if (!bookData.title || !bookData.authors) {
+        toast({
+          title: "Missing details",
+          description: "Title and author are required before saving.",
+          variant: "destructive",
+        });
+        return;
       }
 
-      // Test storage access first
-      const storageAccessible = await testStorageAccess();
-      
-      // Upload processed cover if available
-      let finalCoverUrl = bookData.cover_url as string | undefined;
-      if (processedCoverUrl && storageAccessible) {
-        try {
-          console.log('🖼️ Starting cover upload process...');
-          console.log('📸 Processed cover URL:', processedCoverUrl.substring(0, 50) + '...');
-          
-          // Convert data URL to blob
-          const response = await fetch(processedCoverUrl);
-          const blob = await response.blob();
-          const fileName = `cover_${Date.now()}.jpg`;
-          
-          console.log('📁 File name:', fileName);
-          console.log('📦 Blob size:', blob.size, 'bytes');
-          console.log('📦 Blob type:', blob.type);
-          
-          console.log('🚀 Attempting to upload to Supabase storage...');
-          
-          // Try upload with different approaches
-          let uploadData, uploadError;
-          
-          // First try: Normal upload
-          const uploadResult = await supabase.storage
-            .from('covers')
-            .upload(fileName, blob, {
-              contentType: 'image/jpeg',
-              cacheControl: '3600',
-              upsert: false
-            });
-          
-          uploadData = uploadResult.data;
-          uploadError = uploadResult.error;
-          
-          // If that fails, try with upsert
-          if (uploadError) {
-            console.log('🔄 First upload failed, trying with upsert...');
-            const upsertResult = await supabase.storage
-              .from('covers')
-              .upload(fileName, blob, {
-                contentType: 'image/jpeg',
-                cacheControl: '3600',
-                upsert: true
-              });
-            
-            uploadData = upsertResult.data;
-            uploadError = upsertResult.error;
-          }
+      const response = await fetch("/api/books", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(bookData),
+      });
 
-          if (uploadError) {
-            console.error('❌ Cover upload error:', uploadError);
-            console.error('❌ Error details:', {
-              message: uploadError.message,
-              name: uploadError.name
-            });
-            toast({
-              title: "Cover upload failed",
-              description: uploadError.message || "Book will be saved without cover image",
-              variant: "destructive",
-            });
-          } else {
-            console.log('✅ Upload successful:', uploadData);
-            
-            // Get public URL
-            const { data: urlData } = supabase.storage
-              .from('covers')
-              .getPublicUrl(fileName);
-            finalCoverUrl = urlData.publicUrl;
-            
-            console.log('🔗 Public URL:', finalCoverUrl);
-            
-            toast({
-              title: "Cover uploaded successfully",
-              description: "Cover image saved to Supabase storage",
-            });
-          }
-        } catch (error) {
-          console.error('💥 Cover upload exception:', error);
-          console.error('💥 Error type:', typeof error);
-          console.error('💥 Error stack:', error instanceof Error ? error.stack : 'No stack');
-          toast({
-            title: "Cover upload failed",
-            description: error instanceof Error ? error.message : "Book will be saved without cover image",
-            variant: "destructive",
-          });
-        }
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.message || "Failed to save book");
       }
-
-      // Insert book record
-      const insertPayload = {
-        user_id: demoUserId,
-        title: bookData.title ?? null,
-        author: bookData.authors ?? null,
-        isbn: bookData.isbn ?? null,
-        cover_url: finalCoverUrl ?? null,
-        year: bookData.year || "0000",
-        created_at: new Date().toISOString(),
-      };
-      const { error: insertError } = await (supabase as any).from("books").insert(insertPayload);
-      if (insertError) throw insertError;
 
       toast({ title: "Book saved!", description: `${bookData.title} added to your library.` });
       
       // Clear form for next book
       setBookData(null);
-      setProcessedCoverUrl(null);
+      setIsbnInput("");
     } catch (err: any) {
       console.error(err);
       toast({ title: "Save failed", description: err?.message ?? String(err), variant: "destructive" });
@@ -192,138 +155,172 @@ export default function AddBook() {
       <Navigation />
       
       <main className="container mx-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto">
-          <div className="text-center mb-8">
+        <div className="max-w-2xl mx-auto space-y-6">
+          <div className="text-center mb-4">
             <h1 className="text-3xl font-bold text-foreground mb-2">Add New Book</h1>
-            <p className="text-muted-foreground">Scan a book cover with AI to automatically extract all book information</p>
+            <p className="text-muted-foreground">
+              Look up a title by ISBN, review the details, and save it to your shelf.
+            </p>
           </div>
 
-          {/* Cover Scanner */}
-          <Card className="shadow-card mb-6">
+          <Card className="shadow-card">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Camera className="h-5 w-5" />
-                Cover Scanner (AI)
+                <BookOpenCheck className="h-5 w-5" />
+                ISBN Lookup
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <CoverScanner
-                onExtract={(data) => {
-                  setBookData((prev: any) => ({
-                    ...(prev ?? {}),
-                    title: data.title ?? (prev?.title ?? null),
-                    authors: data.author ?? (prev?.authors ?? null),
-                  }));
-                }}
-                onProcessedImage={(url) => {
-                  setProcessedCoverUrl(url);
-                }}
-                onGeminiExtract={(bookData) => {
-                  console.log("📚 Complete book data extracted:", bookData);
-                  setBookData(bookData);
-                  toast({
-                    title: "Book Data Extracted!",
-                    description: `${bookData.title} by ${bookData.authors} - Ready to save`,
-                  });
-                }}
-              />
-
-              {/* Captured Cover Preview */}
-              {processedCoverUrl && (
-                <div className="space-y-2">
-                  <Label>Captured Cover</Label>
-                  <div className="border rounded-lg p-4 bg-muted/20">
-                    <div className="flex items-center justify-center">
-                      <img 
-                        src={processedCoverUrl} 
-                        alt="Captured book cover"
-                        className="max-w-full max-h-32 object-contain rounded shadow-sm"
-                        onError={(e) => {
-                          e.currentTarget.src = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iMTEyIiB2aWV3Qm94PSIwIDAgODAgMTEyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cmVjdCB3aWR0aD0iODAiIGhlaWdodD0iMTEyIiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCA0OEg1NlY1Nkg0OFY2NEg1NlY3Mkg0OFY4MEg1NlY4OEgyNFY0OFoiIGZpbGw9IiM5Q0EzQUYiLz4KPC9zdmc+";
-                        }}
-                      />
-                    </div>
-                    <div className="text-center mt-2">
-                      <p className="text-sm text-muted-foreground">Cover image captured</p>
-                    </div>
-                  </div>
-                </div>
-              )}
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="isbn-input">ISBN</Label>
+                <Input
+                  id="isbn-input"
+                  value={isbnInput}
+                  onChange={(e) => setIsbnInput(e.target.value)}
+                  placeholder="e.g. 9780143127741"
+                />
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <Button
+                  className="flex-1 bg-gradient-hero hover:opacity-90"
+                  onClick={handleLookup}
+                  disabled={isLookingUp}
+                >
+                  {isLookingUp ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Search className="h-4 w-4 mr-2" />
+                  )}
+                  {isLookingUp ? "Searching..." : "Lookup ISBN"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={startManualEntry}
+                >
+                  <BookPlus className="h-4 w-4 mr-2" />
+                  Manual Entry
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Tip: You can paste either ISBN-10 or ISBN-13. We’ll fetch details from Google Books automatically.
+              </p>
             </CardContent>
           </Card>
 
-
-
-          {/* Book Preview */}
           {bookData && (
             <Card className="shadow-card">
-              <CardContent className="p-6">
-                <h3 className="font-semibold mb-4">Book Preview</h3>
+              <CardHeader>
+                <CardTitle>Review &amp; Edit Details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
                 <div className="flex gap-4">
-                  <img 
-                    src={processedCoverUrl || bookData.cover_url} 
-                    alt={bookData.title}
-                    className="w-20 h-28 object-cover rounded shadow-sm bg-muted"
-                    onError={(e) => {
-                      e.currentTarget.src = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iMTEyIiB2aWV3Qm94PSIwIDAgODAgMTEyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cmVjdCB3aWR0aD0iODAiIGhlaWdodD0iMTEyIiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCA0OEg1NlY1Nkg0OFY2NEg1NlY3Mkg0OFY4MEg1NlY4OEgyNFY0OFoiIGZpbGw9IiM5Q0EzQUYiLz4KPC9zdmc+";
-                    }}
-                  />
-                  <div className="flex-1">
-                    <h4 className="font-medium">{bookData.title}</h4>
-                    <p className="text-sm text-muted-foreground mb-1">by {bookData.authors}</p>
-                    
-                    {/* Book Details */}
-                    <div className="space-y-1 mb-3">
-                      <p className="text-sm text-muted-foreground">
-                        <span className="font-medium">Year:</span> {bookData.year || "0000"}
-                      </p>
-                      {bookData.isbn && (
-                        <p className="text-sm text-muted-foreground">
-                          <span className="font-medium">ISBN:</span> {bookData.isbn}
-                        </p>
-                      )}
-                    </div>
-                    
-                    {/* Additional Info (for display only, not saved to DB) */}
-                    {(bookData.publisher || bookData.description || bookData.pages || bookData.language || (bookData.genres && bookData.genres.length > 0)) && (
-                      <div className="space-y-1 mb-3 p-2 bg-muted/20 rounded text-xs">
-                        <p className="text-muted-foreground font-medium">Additional Info (display only):</p>
-                        {bookData.publisher && (
-                          <p className="text-muted-foreground">
-                            <span className="font-medium">Publisher:</span> {bookData.publisher}
-                          </p>
-                        )}
-                        {bookData.pages && (
-                          <p className="text-muted-foreground">
-                            <span className="font-medium">Pages:</span> {bookData.pages}
-                          </p>
-                        )}
-                        {bookData.language && (
-                          <p className="text-sm text-muted-foreground">
-                            <span className="font-medium">Language:</span> {bookData.language}
-                          </p>
-                        )}
-                        {bookData.genres && bookData.genres.length > 0 && (
-                          <p className="text-muted-foreground">
-                            <span className="font-medium">Genres:</span> {Array.isArray(bookData.genres) ? bookData.genres.join(", ") : bookData.genres}
-                          </p>
-                        )}
-                        {bookData.description && (
-                          <p className="text-muted-foreground line-clamp-2">
-                            <span className="font-medium">Description:</span> {bookData.description}
-                          </p>
-                        )}
+                  <div className="w-24 h-36 rounded bg-muted overflow-hidden shadow-sm">
+                    {bookData.cover_url ? (
+                      <img
+                        src={bookData.cover_url}
+                        alt={bookData.title}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.src =
+                            "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iMTEyIiB2aWV3Qm94PSIwIDAgODAgMTEyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cmVjdCB3aWR0aD0iODAiIGhlaWdodD0iMTEyIiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCA0OEg1NlY1Nkg0OFY2NEg1NlY3Mkg0OFY4MEg1NlY4OEgyNFY0OFoiIGZpbGw9IiM5Q0EzQUYiLz4KPC9zdmc+";
+                        }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground px-2 text-center">
+                        No cover
                       </div>
                     )}
-                    
-                    <Button 
-                      onClick={saveBook}
-                      className="bg-gradient-hero hover:opacity-90"
-                    >
-                      Save to Library
-                    </Button>
+                  </div>
+                  <div className="flex-1 space-y-3">
+                    <div>
+                      <Label htmlFor="title">Title *</Label>
+                      <Input
+                        id="title"
+                        value={bookData.title}
+                        onChange={(e) => updateField("title", e.target.value)}
+                        placeholder="Book title"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="authors">Authors *</Label>
+                      <Input
+                        id="authors"
+                        value={bookData.authors}
+                        onChange={(e) => updateField("authors", e.target.value)}
+                        placeholder="Separate multiple authors with commas"
+                      />
+                    </div>
                   </div>
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="isbn">ISBN</Label>
+                    <Input
+                      id="isbn"
+                      value={bookData.isbn}
+                      onChange={(e) => updateField("isbn", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="year">Publication Year</Label>
+                    <Input
+                      id="year"
+                      value={bookData.year}
+                      maxLength={4}
+                      onChange={(e) => updateField("year", e.target.value)}
+                      placeholder="YYYY"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="publisher">Publisher</Label>
+                    <Input
+                      id="publisher"
+                      value={bookData.publisher}
+                      onChange={(e) => updateField("publisher", e.target.value)}
+                      placeholder="Publisher name"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="genre">Genre</Label>
+                    <Input
+                      id="genre"
+                      value={bookData.genre}
+                      onChange={(e) => updateField("genre", e.target.value)}
+                      placeholder="e.g. Fantasy, Biography"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="cover-url">Cover Image URL</Label>
+                  <Input
+                    id="cover-url"
+                    value={bookData.cover_url}
+                    onChange={(e) => updateField("cover_url", e.target.value)}
+                    placeholder="https://"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="description">Description</Label>
+                  <Textarea
+                    id="description"
+                    value={bookData.description}
+                    onChange={(e) => updateField("description", e.target.value)}
+                    placeholder="Optional summary or notes"
+                    rows={6}
+                  />
+                </div>
+
+                <Button onClick={saveBook} className="w-full bg-gradient-hero hover:opacity-90">
+                  Save to Library
+                </Button>
               </CardContent>
             </Card>
           )}
@@ -331,18 +328,4 @@ export default function AddBook() {
       </main>
     </div>
   );
-}
-
-function dataUrlToUpload(dataUrl: string): { file: File; path: string } {
-  const match = dataUrl.match(/^data:(image\/(?:png|jpeg));base64,(.*)$/);
-  if (!match) throw new Error("Invalid data URL");
-  const mime = match[1];
-  const base64 = match[2];
-  const byteString = atob(base64);
-  const array = new Uint8Array(byteString.length);
-  for (let i = 0; i < byteString.length; i++) array[i] = byteString.charCodeAt(i);
-  const blob = new Blob([array], { type: mime });
-  const filename = `covers/${Date.now()}_${Math.random().toString(36).slice(2)}.${mime === "image/png" ? "png" : "jpg"}`;
-  const file = new File([blob], filename.split("/").pop() || "cover.jpg", { type: mime });
-  return { file, path: filename };
 }
