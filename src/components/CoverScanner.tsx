@@ -12,9 +12,10 @@ export type CoverScannerProps = {
 	onProcessedImage: (dataUrl: string) => void;
 	onGeminiExtract?: (bookData: any) => void;
 	className?: string;
+	autoStart?: boolean;
 };
 
-export default function CoverScanner({ onExtract, onProcessedImage, onGeminiExtract, className }: CoverScannerProps) {
+export default function CoverScanner({ onExtract, onProcessedImage, onGeminiExtract, className, autoStart = false }: CoverScannerProps) {
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const streamRef = useRef<MediaStream | null>(null);
 	const [isReady, setIsReady] = useState(false);
@@ -134,6 +135,21 @@ export default function CoverScanner({ onExtract, onProcessedImage, onGeminiExtr
 			}
 		};
 	}, []);
+
+	useEffect(() => {
+		const boot = async () => {
+			if (!autoStart) return;
+			try {
+				await startCamera();
+				// allow state to flush before auto scanning
+				setTimeout(() => startAutoScan(), 150);
+			} catch (err) {
+				console.error("Auto-start scan failed", err);
+			}
+		};
+		boot();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [autoStart]);
 
 	async function captureFrame(): Promise<string> {
 		if (!videoRef.current) throw new Error("Video not ready");

@@ -1,7 +1,7 @@
-import { getBooksCollection } from "./_lib/mongo.js";
+import { getBooksCollection } from "./_lib/mongo";
 
 export const config = {
-  runtime: "nodejs",
+  runtime: "nodejs18.x",
 };
 
 export default async function handler(): Promise<Response> {
@@ -20,3 +20,5 @@ export default async function handler(): Promise<Response> {
     });
   }
 }
+
+

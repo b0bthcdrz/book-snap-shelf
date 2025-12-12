@@ -1,9 +1,9 @@
 import { ObjectId } from "mongodb";
-import { getBooksCollection, serializeBook } from "../_lib/mongo.js";
-import { parseJsonBody, resolveRequestUrl } from "../_lib/request.js";
+import { getBooksCollection, serializeBook } from "../_lib/mongo";
+import { parseJsonBody, resolveRequestUrl } from "../_lib/request";
 
 export const config = {
-  runtime: "nodejs",
+  runtime: "nodejs18.x",
 };
 
 const jsonResponse = (body: unknown, init?: ResponseInit) =>

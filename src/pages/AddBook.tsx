@@ -6,9 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { BookOpenCheck, BookPlus, Loader2, Search } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { BookOpenCheck, BookPlus, Loader2, Scan, Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { fetchBookByIsbn } from "@/lib/googleBooks";
+import CoverScanner from "@/components/CoverScanner";
 
 type BookFormData = {
   title: string;
@@ -36,6 +38,8 @@ export default function AddBook() {
   const [bookData, setBookData] = useState<BookFormData | null>(null);
   const [isbnInput, setIsbnInput] = useState("");
   const [isLookingUp, setIsLookingUp] = useState(false);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [pendingCover, setPendingCover] = useState("");
   const { toast } = useToast();
 
   useEffect(() => {
@@ -46,6 +50,29 @@ export default function AddBook() {
       });
     }
   }, [toast]);
+
+  const applyScannedData = (data: Partial<BookFormData>) => {
+    setBookData((prev) => ({
+      ...(prev ?? emptyBook),
+      title: data.title ?? prev?.title ?? "",
+      authors: data.authors ?? prev?.authors ?? "",
+      isbn: data.isbn ?? prev?.isbn ?? "",
+      year: data.year ?? prev?.year ?? "",
+      publisher: data.publisher ?? prev?.publisher ?? "",
+      genre: data.genre ?? prev?.genre ?? "",
+      description: data.description ?? prev?.description ?? "",
+      cover_url: data.cover_url ?? pendingCover ?? prev?.cover_url ?? "",
+    }));
+
+    if (data.isbn) {
+      setIsbnInput(data.isbn);
+    }
+
+    toast({
+      title: "Book detected",
+      description: "Review the title and author before saving.",
+    });
+  };
 
   const handleLookup = async () => {
     const cleanedIsbn = isbnInput.replace(/[^\dXx]/g, "");
@@ -126,17 +153,30 @@ export default function AddBook() {
         return;
       }
 
+      const payload = {
+        ...bookData,
+        title: bookData.title.trim(),
+        authors: bookData.authors.trim(),
+      };
+
       const response = await fetch("/api/books", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(bookData),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody?.message || "Failed to save book");
+        const message = errorBody?.message || "Failed to save book";
+        if (response.status === 409) {
+          throw new Error("A book with this ISBN already exists. Please verify or change the ISBN.");
+        }
+        if (response.status === 400) {
+          throw new Error(message || "Missing required fields.");
+        }
+        throw new Error(message);
       }
 
       toast({ title: "Book saved!", description: `${bookData.title} added to your library.` });
@@ -181,6 +221,15 @@ export default function AddBook() {
                 />
               </div>
               <div className="flex flex-col sm:flex-row gap-3">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setIsScannerOpen(true)}
+                >
+                  <Scan className="h-4 w-4 mr-2" />
+                  Scan &amp; Lookup
+                </Button>
                 <Button
                   className="flex-1 bg-gradient-hero hover:opacity-90"
                   onClick={handleLookup}
@@ -326,6 +375,41 @@ export default function AddBook() {
           )}
         </div>
       </main>
+
+      <Dialog open={isScannerOpen} onOpenChange={setIsScannerOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Scan &amp; Lookup</DialogTitle>
+            <DialogDescription>
+              Point your camera at the book cover. We’ll detect it, auto-look up details, and you can still edit title and author before saving.
+            </DialogDescription>
+          </DialogHeader>
+          <CoverScanner
+            autoStart
+            className="shadow-none"
+            onProcessedImage={(url) => setPendingCover(url)}
+            onGeminiExtract={(gemini) => {
+              applyScannedData({
+                title: gemini.title ?? "",
+                authors: gemini.authors ?? "",
+                isbn: gemini.isbn ?? "",
+                year: gemini.year ?? "",
+                publisher: gemini.publisher ?? "",
+                genre: (gemini.genres ?? [])[0] ?? "",
+                description: gemini.description ?? "",
+                cover_url: gemini.cover_url ?? "",
+              });
+              setIsScannerOpen(false);
+            }}
+            onExtract={(partial) => {
+              applyScannedData({
+                title: partial.title ?? "",
+                authors: partial.author ?? "",
+              });
+            }}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

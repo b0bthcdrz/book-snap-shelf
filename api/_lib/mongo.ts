@@ -19,7 +19,12 @@ function getClientPromise(): Promise<MongoClient> {
   }
 
   const client = new MongoClient(uri);
-  const promise = client.connect();
+  const promise = client.connect().catch((err) => {
+    console.error("MongoDB connection failed", err);
+    // reset the cached promise so the next call can retry
+    globalWithMongo._mongoClientPromise = undefined;
+    throw err;
+  });
   globalWithMongo._mongoClientPromise = promise;
   return promise;
 }

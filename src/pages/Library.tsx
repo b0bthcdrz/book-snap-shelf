@@ -7,9 +7,18 @@ import { Link, useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Library() {
-  const [books, setBooks] = useState<any[]>([]);
+  type Book = {
+    id: string;
+    title: string;
+    author: string;
+    isbn: string | null;
+    cover_url: string | null;
+    year: string | null;
+  };
+
+  const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
-  const [deletingBookId, setDeletingBookId] = useState<number | null>(null);
+  const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -23,28 +32,28 @@ export default function Library() {
         }
         const body = await response.json();
         setBooks(body?.books ?? []);
-      } catch (error) {
+      } catch (error: any) {
         console.error(error);
         setBooks([]);
         toast({
           title: "Error loading books",
-          description: error instanceof Error ? error.message : "Please try again later",
+          description: error?.message || "Could not fetch your library from the server.",
           variant: "destructive",
         });
       } finally {
         setLoading(false);
       }
     })();
-  }, [toast]);
+  }, []);
 
   const count = books.length;
 
-  const handleDeleteBook = async (bookId: number, bookTitle: string) => {
+  const handleDeleteBook = async (bookId: string, bookTitle: string) => {
     if (!confirm(`Are you sure you want to delete "${bookTitle}"?`)) return;
 
     try {
       setDeletingBookId(bookId);
-      
+
       const response = await fetch(`/api/books/${bookId}`, {
         method: "DELETE",
       });
@@ -55,7 +64,7 @@ export default function Library() {
       }
 
       // Remove from local state
-      setBooks(books.filter(b => b.id !== bookId));
+      setBooks((prev) => prev.filter((b) => b.id !== bookId));
       
       toast({
         title: "Book deleted",
@@ -114,11 +123,7 @@ export default function Library() {
         ) : (
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
           {books.map((book) => (
-            <Card
-              key={book.id}
-              className="group relative cursor-pointer hover:shadow-book transition-all duration-300 hover:-translate-y-1"
-              onClick={() => navigate(`/book/${book.id}`)}
-            >
+            <Card key={book.id} className="group relative cursor-pointer hover:shadow-book transition-all duration-300 hover:-translate-y-1">
               <CardContent className="p-4">
                 {/* Action Buttons */}
                 <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10">
